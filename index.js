@@ -31,6 +31,82 @@ async function run() {
     const usersCollection = database.collection("user");
     const classesCollection = database.collection("classes");
 
+    // All Public API
+    app.get("/api/classes", async (req, res) => {
+      try {
+        const { search, category, page = 1, limit = 15 } = req.query;
+
+        const query = { status: "Approved" };
+
+        if (search && search.trim() !== "") {
+          query.className = { $regex: search.trim(), $options: "i" };
+        }
+
+        if (category && category.trim() !== "") {
+          const categoryArray = category.split(",").map((cat) => cat.trim());
+          query.category = { $in: categoryArray };
+        }
+
+        const pageNumber = parseInt(page, 10);
+        const limitNumber = parseInt(limit, 10);
+        const skipOffset = (pageNumber - 1) * limitNumber;
+
+        const [classes, totalCount] = await Promise.all([
+          classesCollection
+            .find(query)
+            .skip(skipOffset)
+            .limit(limitNumber)
+            .toArray(),
+          classesCollection.countDocuments(query),
+        ]);
+
+        const totalPages = Math.ceil(totalCount / limitNumber);
+
+        res.send({
+          success: true,
+          data: classes,
+          meta: {
+            totalItems: totalCount,
+            totalPages,
+            currentPage: pageNumber,
+            limit: limitNumber,
+            hasNextPage: pageNumber < totalPages,
+            hasPrevPage: pageNumber > 1,
+          },
+        });
+      } catch (error) {
+        console.error("Error retrieving public classes catalog:", error);
+        res.status(500).send({
+          success: false,
+          message: "Internal server error while fetching classes catalog.",
+        });
+      }
+    });
+
+    app.get("/api/categories", async (req, res) => {
+      try {
+        const categoriesPipeline = await classesCollection
+          .aggregate([
+            { $match: { status: "Approved" } },
+            { $group: { _id: "$category" } },
+            { $match: { _id: { $ne: null } } },
+          ])
+          .toArray();
+
+        const cleanCategories = categoriesPipeline.map((item) => item._id);
+
+        res.send({
+          success: true,
+          data: cleanCategories,
+        });
+      } catch (error) {
+        console.error("Error retrieving unique categories:", error);
+        res.status(500).send({
+          success: false,
+          message: "Internal server error while fetching categories.",
+        });
+      }
+    });
 
     // All API for trainer
     // Classes API
@@ -63,16 +139,22 @@ async function run() {
       } else {
         res.status(404).send({ message: "Class not found" });
       }
-    })
+    });
 
-
-
-
-
-
-
-
-
+    app.patch("/api/classes/:id", async (req, res) => {
+      const id = req.params.id;
+      const updatedClass = req.body;
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: updatedClass,
+      };
+      const result = await classesCollection.updateOne(filter, updateDoc);
+      if (result.modifiedCount === 1) {
+        res.send({ success: true, message: "Class updated successfully" });
+      } else {
+        res.status(404).send({ success: false, message: "Class not found" });
+      }
+    });
 
     // Send a ping to confirm a successful connection
     // await client.db("admin").command({ ping: 1 });
