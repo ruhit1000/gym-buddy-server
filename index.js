@@ -108,6 +108,18 @@ async function run() {
       }
     });
 
+    // All API for logged in user
+    app.get("/api/classes/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await classesCollection.findOne(query);
+      if (result) {
+        res.status(200).send({ success: true, data: result });
+      } else {
+        res.status(404).send({ message: "Class not found" });
+      }
+    })
+
     // All API for trainer
     // Classes API
     app.post("/api/classes", async (req, res) => {
