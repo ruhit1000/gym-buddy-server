@@ -1,4 +1,4 @@
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
@@ -31,12 +31,6 @@ async function run() {
     const usersCollection = database.collection("user");
     const classesCollection = database.collection("classes");
 
-    // Test API
-    app.get("/users", async (req, res) => {
-      const cursor = usersCollection.find();
-      const result = await cursor.toArray();
-      res.send(result);
-    });
 
     // All API for trainer
     // Classes API
@@ -50,7 +44,7 @@ async function run() {
       }
     });
 
-    app.get("/api/my-classes", async (req, res) => {
+    app.get("/api/classes/my-classes", async (req, res) => {
       const query = {};
       if (req.query.trainerId) {
         query.trainerId = req.query.trainerId;
@@ -59,6 +53,26 @@ async function run() {
       const result = await cursor.toArray();
       res.send(result);
     });
+
+    app.delete("/api/classes/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await classesCollection.deleteOne(query);
+      if (result.deletedCount === 1) {
+        res.send({ message: "Class deleted successfully" });
+      } else {
+        res.status(404).send({ message: "Class not found" });
+      }
+    })
+
+
+
+
+
+
+
+
+
 
     // Send a ping to confirm a successful connection
     // await client.db("admin").command({ ping: 1 });
