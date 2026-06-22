@@ -2,18 +2,16 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
-const app = express();
-const port = 5000;
 
+const app = express();
+const port = process.env.PORT || 5000;
+
+// --- Middlewares Configuration ---
 app.use(cors());
 app.use(express.json());
 
-app.get("/", (req, res) => {
-  res.send("Hello World!");
-});
-
+// --- Database Configuration ---
 const uri = process.env.MONGODB_URI;
-
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -24,7 +22,6 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
 
     const database = client.db("gym-buddy");
@@ -33,6 +30,7 @@ async function run() {
     const favoritesCollection = database.collection("favorites");
     const sessionCollection = database.collection("session");
 
+    // --- Authentication & Authorization Middlewares ---
     const verifyToken = async (req, res, next) => {
       const authHeader = req?.headers?.authorization;
       if (!authHeader) {
@@ -77,11 +75,17 @@ async function run() {
       next();
     };
 
-    // All Public API
+    // ==========================================
+    // 1. PUBLIC API ROUTES
+    // ==========================================
+    app.get("/", (req, res) => {
+      res.send("Hello World!");
+    });
+
+    // Get Approved Classes Catalog Catalog (With Search, Filter, Pagination)
     app.get("/api/classes", async (req, res) => {
       try {
         const { search, category, page = 1, limit = 15 } = req.query;
-
         const query = { status: "Approved" };
 
         if (search && search.trim() !== "") {
@@ -129,6 +133,7 @@ async function run() {
       }
     });
 
+    // Get Unique List of Available Categories
     app.get("/api/categories", async (req, res) => {
       try {
         const categoriesPipeline = await classesCollection
@@ -154,20 +159,11 @@ async function run() {
       }
     });
 
-    // All API for logged in user
-    app.get("/api/classes/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await classesCollection.findOne(query);
-      if (result) {
-        res.status(200).send({ success: true, data: result });
-      } else {
-        res.status(404).send({ message: "Class not found" });
-      }
-    });
+    // ==========================================
+    // 2. TRAINER & PROTECTED MANIPULATION ROUTES
+    // ==========================================
 
-    // All API for trainer
-    // Classes API
+    // Create New Class Entry
     app.post("/api/classes", verifyToken, verifyTrainer, async (req, res) => {
       const newClass = req.body;
       const result = await classesCollection.insertOne(newClass);
@@ -178,21 +174,27 @@ async function run() {
       }
     });
 
-    app.get(
-      "/api/classes/my-classes",
-      verifyToken,
-      verifyTrainer,
-      async (req, res) => {
-        const query = {};
-        if (req.query.trainerId) {
-          query.trainerId = req.query.trainerId;
-        }
-        const cursor = classesCollection.find(query);
-        const result = await cursor.toArray();
-        res.send(result);
-      },
-    );
+    // Get Logged In Trainer's Specific Classes (CRITICAL: Static routes placed ABOVE dynamic dynamic paths)
+    app.get("/api/classes/my-classes", verifyToken, async (req, res) => {
+      try {
+        const user = req.user;
 
+        const query = {
+          trainerId: user._id.toString(),
+        };
+
+        const result = await classesCollection.find(query).toArray();
+
+        res.send(result);
+      } catch (error) {
+        console.error("Error retrieving trainer classes:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Internal Server Error" });
+      }
+    });
+
+    // Delete Targeted Class Entry
     app.delete("/api/classes/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
@@ -204,6 +206,7 @@ async function run() {
       }
     });
 
+    // Partial Edit Update Class Meta Property Attributes
     app.patch("/api/classes/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const updatedClass = req.body;
@@ -219,21 +222,37 @@ async function run() {
       }
     });
 
-    // All API for user
-    // Favorites API
+    // Fetch Details for a Single Specific Class
+    app.get("/api/classes/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await classesCollection.findOne(query);
+      if (result) {
+        res.status(200).send({ success: true, data: result });
+      } else {
+        res.status(404).send({ message: "Class not found" });
+      }
+    });
+
+    // ==========================================
+    // 3. SECURED USER REACTION/FAVORITES ROUTES
+    // ==========================================
+
+    // Toggle Favorite Action (Add or Remove)
     app.post("/api/favorites/toggle", verifyToken, async (req, res) => {
       try {
-        const { userId, classId } = req.body;
+        const user = req.user;
+        const { classId } = req.body;
 
-        if (!userId || !classId) {
+        if (!classId) {
           return res.status(400).send({
             success: false,
-            message: "Missing required fields: userId and classId",
+            message: "Missing required field: classId",
           });
         }
 
         const query = {
-          userId: new ObjectId(userId),
+          userId: new ObjectId(user._id),
           classId: new ObjectId(classId),
         };
 
@@ -269,6 +288,7 @@ async function run() {
       }
     });
 
+    // Verify If Class Exists On Target User's List
     app.get("/api/favorites/check", verifyToken, async (req, res) => {
       try {
         const user = req.user;
@@ -302,14 +322,10 @@ async function run() {
       }
     });
 
-    // Send a ping to confirm a successful connection
-    // await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
   } finally {
-    // Ensures that the client will close when you finish/error
-    // await client.close();
   }
 }
 run().catch(console.dir);
