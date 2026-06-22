@@ -322,6 +322,117 @@ async function run() {
       }
     });
 
+    app.get("/api/favorites/my-favorites", verifyToken, async (req, res) => {
+      try {
+        const user = req.user;
+
+        const pipeline = [
+          {
+            $match: {
+              userId: new ObjectId(user._id),
+            },
+          },
+          {
+            $lookup: {
+              from: "classes",
+              localField: "classId",
+              foreignField: "_id",
+              as: "classDetails",
+            },
+          },
+          {
+            $unwind: "$classDetails",
+          },
+          {
+            $project: {
+              _id: 1,
+              createdAt: 1,
+              classId: 1,
+              classData: {
+                _id: "$classDetails._id",
+                className: "$classDetails.className",
+                price: "$classDetails.price",
+                duration: "$classDetails.duration",
+                totalSlots: "$classDetails.totalSlots",
+                bookingCount: "$classDetails.bookingCount",
+                intensity: "$classDetails.intensity",
+                category: "$classDetails.category",
+                image: "$classDetails.image",
+              },
+            },
+          },
+        ];
+
+        const result = await favoritesCollection.aggregate(pipeline).toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Error retrieving my favorites via aggregation:", error);
+        res.status(500).send({
+          success: false,
+          message:
+            "Internal server error while retrieving aggregated favorites.",
+        });
+      }
+    });
+
+    app.post("/api/users/apply-trainer", verifyToken, async (req, res) => {
+      try {
+        const user = req.user;
+        const { experience, specialties } = req.body;
+
+        if (
+          !experience ||
+          !specialties ||
+          !Array.isArray(specialties) ||
+          specialties.length === 0
+        ) {
+          return res.status(400).send({
+            success: false,
+            message:
+              "Missing required profile details: experience or specialties.",
+          });
+        }
+
+        const filter = { _id: new ObjectId(user._id) };
+
+        const updateDoc = {
+          $set: {
+            trainerApplication: "pending",
+            trainerApplicationDetails: {
+              experience: parseInt(experience, 10),
+              specialties: specialties,
+              appliedAt: new Date(),
+            },
+          },
+        };
+
+        const result = await usersCollection.updateOne(filter, updateDoc);
+
+        if (result.modifiedCount === 1) {
+          res.status(200).send({
+            success: true,
+            message:
+              "Application submitted successfully. Status updated to pending.",
+          });
+        } else {
+          res.status(404).send({
+            success: false,
+            message: "User profile record not found or data unchanged.",
+          });
+        }
+      } catch (error) {
+        console.error(
+          "Error processing trainer application submission:",
+          error,
+        );
+        res.status(500).send({
+          success: false,
+          message:
+            "Internal server error while compiling trainer verification records.",
+        });
+      }
+    });
+
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
