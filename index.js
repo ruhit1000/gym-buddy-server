@@ -29,6 +29,7 @@ async function run() {
     const classesCollection = database.collection("classes");
     const favoritesCollection = database.collection("favorites");
     const sessionCollection = database.collection("session");
+    const forumPostsCollection = database.collection("forumPosts");
 
     // --- Authentication & Authorization Middlewares ---
     const verifyToken = async (req, res, next) => {
@@ -148,6 +149,79 @@ async function run() {
         res.status(500).send({
           success: false,
           message: "Internal server error while fetching classes catalog.",
+        });
+      }
+    });
+
+    // Get All Submitted Classes Across All Status States
+    app.get(
+      "/api/classes/manage",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const classes = await classesCollection
+            .find({})
+            .sort({ createdAt: -1 })
+            .toArray();
+          res
+            .status(200)
+            .send({ success: true, count: classes.length, data: classes });
+        } catch (error) {
+          console.error("Error fetching submitted classes directory:", error);
+          res.status(500).send({
+            success: false,
+            message:
+              "Internal server error while retrieving administrative classes workspace.",
+          });
+        }
+      },
+    );
+
+    // Get All Forum Posts (Newest First)
+    app.get("/api/forum", async (req, res) => {
+      try {
+        const { search, page = 1, limit = 15 } = req.query;
+        const query = {};
+
+        if (search && search.trim() !== "") {
+          query.title = { $regex: search.trim(), $options: "i" };
+        }
+
+        const pageNumber = parseInt(page, 10);
+        const limitNumber = parseInt(limit, 10);
+        const skipOffset = (pageNumber - 1) * limitNumber;
+
+        const [posts, totalCount] = await Promise.all([
+          forumPostsCollection
+            .find(query)
+            .skip(skipOffset)
+            .limit(limitNumber)
+            .sort({ createdAt: -1 })
+            .toArray(),
+          forumPostsCollection.countDocuments(query),
+        ]);
+
+        const totalPages = Math.ceil(totalCount / limitNumber);
+
+        res.status(200).send({
+          success: true,
+          data: posts,
+          meta: {
+            totalItems: totalCount,
+            totalPages,
+            currentPage: pageNumber,
+            limit: limitNumber,
+            hasNextPage: pageNumber < totalPages,
+            hasPrevPage: pageNumber > 1,
+          },
+        });
+      } catch (error) {
+        console.error("Error retrieving forum posts directory:", error);
+        res.status(500).send({
+          success: false,
+          message:
+            "Internal server error while fetching community forum posts.",
         });
       }
     });
@@ -297,87 +371,84 @@ async function run() {
         });
 
         if (!user) {
-          return res
-            .status(404)
-            .send({
-              success: false,
-              message: "User profile record not found.",
-            });
+          return res.status(404).send({
+            success: false,
+            message: "User profile record not found.",
+          });
         }
 
         res.status(200).send({ success: true, data: user });
       } catch (error) {
         console.error("Error retrieving user profile information:", error);
-        res
-          .status(500)
-          .send({
-            success: false,
-            message: "Internal server error while fetching user profile data.",
-          });
+        res.status(500).send({
+          success: false,
+          message: "Internal server error while fetching user profile data.",
+        });
       }
     });
 
     // Submit New Verification Professional Application Form to Become a Trainer
-    app.post("/api/users/apply-trainer", verifyToken, async (req, res) => {
-      try {
-        const user = req.user;
-        const { experience, specialties } = req.body;
+    app.post(
+      "/api/users/apply-trainer",
+      verifyToken,
+      checkBlock,
+      async (req, res) => {
+        try {
+          const user = req.user;
+          const { experience, specialties } = req.body;
 
-        if (
-          !experience ||
-          !specialties ||
-          !Array.isArray(specialties) ||
-          specialties.length === 0
-        ) {
-          return res.status(400).send({
-            success: false,
-            message:
-              "Missing required profile details: experience or specialties.",
-          });
-        }
+          if (
+            !experience ||
+            !specialties ||
+            !Array.isArray(specialties) ||
+            specialties.length === 0
+          ) {
+            return res.status(400).send({
+              success: false,
+              message:
+                "Missing required profile details: experience or specialties.",
+            });
+          }
 
-        const filter = { _id: new ObjectId(user._id) };
-        const updateDoc = {
-          $set: {
-            trainerApplication: "pending",
-            trainerApplicationDetails: {
-              experience: parseInt(experience, 10),
-              specialties: specialties,
-              appliedAt: new Date(),
+          const filter = { _id: new ObjectId(user._id) };
+          const updateDoc = {
+            $set: {
+              trainerApplication: "pending",
+              trainerApplicationDetails: {
+                experience: parseInt(experience, 10),
+                specialties: specialties,
+                appliedAt: new Date(),
+              },
             },
-          },
-        };
+          };
 
-        const result = await usersCollection.updateOne(filter, updateDoc);
+          const result = await usersCollection.updateOne(filter, updateDoc);
 
-        if (result.modifiedCount === 1) {
-          res.status(200).send({
-            success: true,
-            message:
-              "Application submitted successfully. Status updated to pending.",
-          });
-        } else {
-          res
-            .status(404)
-            .send({
+          if (result.modifiedCount === 1) {
+            res.status(200).send({
+              success: true,
+              message:
+                "Application submitted successfully. Status updated to pending.",
+            });
+          } else {
+            res.status(404).send({
               success: false,
               message: "User profile record not found or data unchanged.",
             });
-        }
-      } catch (error) {
-        console.error(
-          "Error processing trainer application submission:",
-          error,
-        );
-        res
-          .status(500)
-          .send({
+          }
+        } catch (error) {
+          console.error(
+            "Error processing trainer application submission:",
+            error,
+          );
+          res.status(500).send({
             success: false,
             message:
               "Internal server error while compiling trainer verification records.",
           });
-      }
-    });
+        }
+      },
+    );
 
     // Toggle Favorite Action Matrix (Add or Remove)
     app.post("/api/favorites/toggle", verifyToken, async (req, res) => {
@@ -386,12 +457,10 @@ async function run() {
         const { classId } = req.body;
 
         if (!classId) {
-          return res
-            .status(400)
-            .send({
-              success: false,
-              message: "Missing required field: classId",
-            });
+          return res.status(400).send({
+            success: false,
+            message: "Missing required field: classId",
+          });
         }
 
         const query = {
@@ -420,12 +489,10 @@ async function run() {
         });
       } catch (error) {
         console.error("Error toggling favorite class state:", error);
-        res
-          .status(500)
-          .send({
-            success: false,
-            message: "Internal server error while processing favorite updates.",
-          });
+        res.status(500).send({
+          success: false,
+          message: "Internal server error while processing favorite updates.",
+        });
       }
     });
 
@@ -436,12 +503,10 @@ async function run() {
         const { classId } = req.query;
 
         if (!classId) {
-          return res
-            .status(400)
-            .send({
-              success: false,
-              message: "Missing parameter: classId is required",
-            });
+          return res.status(400).send({
+            success: false,
+            message: "Missing parameter: classId is required",
+          });
         }
 
         const query = {
@@ -453,12 +518,10 @@ async function run() {
         res.status(200).send({ success: true, isFavorited: count > 0 });
       } catch (error) {
         console.error("Error verifying class favorite criteria state:", error);
-        res
-          .status(500)
-          .send({
-            success: false,
-            message: "Internal server error while checking favorite status.",
-          });
+        res.status(500).send({
+          success: false,
+          message: "Internal server error while checking favorite status.",
+        });
       }
     });
 
@@ -501,13 +564,11 @@ async function run() {
         res.status(200).send(result);
       } catch (error) {
         console.error("Error retrieving my favorites via aggregation:", error);
-        res
-          .status(500)
-          .send({
-            success: false,
-            message:
-              "Internal server error while retrieving aggregated favorites.",
-          });
+        res.status(500).send({
+          success: false,
+          message:
+            "Internal server error while retrieving aggregated favorites.",
+        });
       }
     });
 
@@ -572,54 +633,21 @@ async function run() {
           const result = await usersCollection.updateOne(filter, updateDoc);
 
           if (result.modifiedCount === 1) {
-            res
-              .status(200)
-              .send({
-                success: true,
-                message: `User successfully updated via: ${action}`,
-              });
+            res.status(200).send({
+              success: true,
+              message: `User successfully updated via: ${action}`,
+            });
           } else {
-            res
-              .status(404)
-              .send({
-                success: false,
-                message: "User not found or no changes made.",
-              });
+            res.status(404).send({
+              success: false,
+              message: "User not found or no changes made.",
+            });
           }
         } catch (error) {
-          res
-            .status(500)
-            .send({
-              success: false,
-              message: "Internal server error updating user configurations.",
-            });
-        }
-      },
-    );
-
-    // Get All Submitted Classes Across All Status States
-    app.get(
-      "/api/classes/manage",
-      verifyToken,
-      verifyAdmin,
-      async (req, res) => {
-        try {
-          const classes = await classesCollection
-            .find({})
-            .sort({ createdAt: -1 })
-            .toArray();
-          res
-            .status(200)
-            .send({ success: true, count: classes.length, data: classes });
-        } catch (error) {
-          console.error("Error fetching submitted classes directory:", error);
-          res
-            .status(500)
-            .send({
-              success: false,
-              message:
-                "Internal server error while retrieving administrative classes workspace.",
-            });
+          res.status(500).send({
+            success: false,
+            message: "Internal server error updating user configurations.",
+          });
         }
       },
     );
@@ -634,12 +662,10 @@ async function run() {
           const { classId, action } = req.body;
 
           if (!classId || !["approve", "reject", "delete"].includes(action)) {
-            return res
-              .status(400)
-              .send({
-                success: false,
-                message: "Invalid action payload context parameters.",
-              });
+            return res.status(400).send({
+              success: false,
+              message: "Invalid action payload context parameters.",
+            });
           }
 
           const filter = { _id: new ObjectId(classId) };
@@ -647,12 +673,10 @@ async function run() {
           if (action === "delete") {
             const deleteResult = await classesCollection.deleteOne(filter);
             if (deleteResult.deletedCount === 1) {
-              return res
-                .status(200)
-                .send({
-                  success: true,
-                  message: "Class entry permanently removed.",
-                });
+              return res.status(200).send({
+                success: true,
+                message: "Class entry permanently removed.",
+              });
             }
           } else {
             const targetStatus = action === "approve" ? "Approved" : "Pending";
@@ -661,29 +685,23 @@ async function run() {
             });
 
             if (updateResult.modifiedCount === 1) {
-              return res
-                .status(200)
-                .send({
-                  success: true,
-                  message: `Class state successfully adjusted to ${targetStatus}`,
-                });
+              return res.status(200).send({
+                success: true,
+                message: `Class state successfully adjusted to ${targetStatus}`,
+              });
             }
           }
 
-          res
-            .status(404)
-            .send({
-              success: false,
-              message: "Class record not found or no alterations made.",
-            });
+          res.status(404).send({
+            success: false,
+            message: "Class record not found or no alterations made.",
+          });
         } catch (error) {
           console.error("Error managing class action execution:", error);
-          res
-            .status(500)
-            .send({
-              success: false,
-              message: "Internal server error reviewing classes.",
-            });
+          res.status(500).send({
+            success: false,
+            message: "Internal server error reviewing classes.",
+          });
         }
       },
     );
@@ -715,13 +733,11 @@ async function run() {
             .sort({ "trainerApplicationDetails.appliedAt": -1 })
             .toArray();
 
-          res
-            .status(200)
-            .send({
-              success: true,
-              count: applications.length,
-              data: applications,
-            });
+          res.status(200).send({
+            success: true,
+            count: applications.length,
+            data: applications,
+          });
         } catch (error) {
           res
             .status(500)
@@ -740,13 +756,11 @@ async function run() {
           const { userId, action, feedback } = req.body;
 
           if (!userId || !["approve", "reject"].includes(action)) {
-            return res
-              .status(400)
-              .send({
-                success: false,
-                message:
-                  "Invalid payload parameters. Required: userId and action ('approve' or 'reject').",
-              });
+            return res.status(400).send({
+              success: false,
+              message:
+                "Invalid payload parameters. Required: userId and action ('approve' or 'reject').",
+            });
           }
 
           const filter = { _id: new ObjectId(userId) };
@@ -775,30 +789,24 @@ async function run() {
           const result = await usersCollection.updateOne(filter, updateDoc);
 
           if (result.modifiedCount === 1) {
-            res
-              .status(200)
-              .send({
-                success: true,
-                message: `Application successfully processed with status: ${action}.`,
-              });
+            res.status(200).send({
+              success: true,
+              message: `Application successfully processed with status: ${action}.`,
+            });
           } else {
-            res
-              .status(404)
-              .send({
-                success: false,
-                message:
-                  "Target user application not found or status already set.",
-              });
+            res.status(404).send({
+              success: false,
+              message:
+                "Target user application not found or status already set.",
+            });
           }
         } catch (error) {
           console.error("Error updating trainer application status:", error);
-          res
-            .status(500)
-            .send({
-              success: false,
-              message:
-                "Internal server error while processing approval state changes.",
-            });
+          res.status(500).send({
+            success: false,
+            message:
+              "Internal server error while processing approval state changes.",
+          });
         }
       },
     );
@@ -824,12 +832,10 @@ async function run() {
           .send({ success: true, count: trainers.length, data: trainers });
       } catch (error) {
         console.error("Error retrieving trainers list:", error);
-        res
-          .status(500)
-          .send({
-            success: false,
-            message: "Internal server error while fetching trainers directory.",
-          });
+        res.status(500).send({
+          success: false,
+          message: "Internal server error while fetching trainers directory.",
+        });
       }
     });
 
