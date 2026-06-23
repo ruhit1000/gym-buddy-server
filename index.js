@@ -433,6 +433,169 @@ async function run() {
       }
     });
 
+    app.get(
+      "/api/applied-trainers",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const query = {
+            trainerApplication: { $in: ["pending", "rejected"] },
+          };
+
+          const options = {
+            projection: {
+              _id: 1,
+              name: 1,
+              email: 1,
+              image: 1,
+              role: 1,
+              trainerApplication: 1,
+              trainerApplicationDetails: 1,
+            },
+          };
+
+          const applications = await usersCollection
+            .find(query, options)
+            .sort({ "trainerApplicationDetails.appliedAt": -1 })
+            .toArray();
+
+          res.status(200).send({
+            success: true,
+            count: applications.length,
+            data: applications,
+          });
+        } catch (error) {
+          res
+            .status(500)
+            .send({ success: false, message: "Internal server error" });
+        }
+      },
+    );
+
+    app.patch(
+      "/api/applied-trainers/review",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { userId, action, feedback } = req.body;
+
+          if (!userId || !["approve", "reject"].includes(action)) {
+            return res.status(400).send({
+              success: false,
+              message:
+                "Invalid payload parameters. Required: userId and action ('approve' or 'reject').",
+            });
+          }
+
+          const filter = { _id: new ObjectId(userId) };
+          let updateDoc = {};
+
+          if (action === "approve") {
+            updateDoc = {
+              $set: {
+                role: "trainer",
+                trainerApplication: "approved",
+                "trainerApplicationDetails.reviewedAt": new Date(),
+              },
+            };
+          } else if (action === "reject") {
+            updateDoc = {
+              $set: {
+                role: "user",
+                trainerApplication: "rejected",
+                "trainerApplicationDetails.feedback":
+                  feedback || "No feedback provided.",
+                "trainerApplicationDetails.reviewedAt": new Date(),
+              },
+            };
+          }
+
+          const result = await usersCollection.updateOne(filter, updateDoc);
+
+          if (result.modifiedCount === 1) {
+            res.status(200).send({
+              success: true,
+              message: `Application successfully processed with status: ${action}.`,
+            });
+          } else {
+            res.status(404).send({
+              success: false,
+              message:
+                "Target user application not found or status already set.",
+            });
+          }
+        } catch (error) {
+          console.error("Error updating trainer application status:", error);
+          res.status(500).send({
+            success: false,
+            message:
+              "Internal server error while processing approval state changes.",
+          });
+        }
+      },
+    );
+
+    app.get("/api/users/me", verifyToken, async (req, res) => {
+      try {
+        const tokenUser = req.user;
+
+        const user = await usersCollection.findOne({
+          _id: new ObjectId(tokenUser._id),
+        });
+
+        if (!user) {
+          return res.status(404).send({
+            success: false,
+            message: "User profile record not found.",
+          });
+        }
+
+        res.status(200).send({
+          success: true,
+          data: user,
+        });
+      } catch (error) {
+        console.error("Error retrieving user profile information:", error);
+        res.status(500).send({
+          success: false,
+          message: "Internal server error while fetching user profile data.",
+        });
+      }
+    });
+
+    app.get("/api/trainers", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const query = { role: "trainer" };
+
+        const options = {
+          projection: {
+            _id: 1,
+            name: 1,
+            email: 1,
+            image: 1,
+            role: 1,
+            trainerApplicationDetails: 1,
+          },
+        };
+
+        const trainers = await usersCollection.find(query, options).toArray();
+
+        res.status(200).send({
+          success: true,
+          count: trainers.length,
+          data: trainers,
+        });
+      } catch (error) {
+        console.error("Error retrieving trainers list:", error);
+        res.status(500).send({
+          success: false,
+          message: "Internal server error while fetching trainers directory.",
+        });
+      }
+    });
+
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
