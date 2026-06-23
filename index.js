@@ -75,6 +75,20 @@ async function run() {
       next();
     };
 
+    const checkBlock = async (req, res, next) => {
+      const userRecord = await usersCollection.findOne({
+        _id: new ObjectId(req.user._id),
+      });
+
+      if (userRecord && userRecord.status === "blocked") {
+        return res.status(403).send({
+          success: false,
+          message: "Action restricted by Admin",
+        });
+      }
+      next();
+    };
+
     // ==========================================
     // 1. PUBLIC API ROUTES
     // ==========================================
@@ -595,6 +609,83 @@ async function run() {
         });
       }
     });
+
+    // 1. GET ALL USERS (For rendering the data table)
+    app.get("/api/users", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const options = {
+          projection: {
+            _id: 1,
+            name: 1,
+            email: 1,
+            image: 1,
+            role: 1,
+            status: 1,
+          },
+        };
+        // Fetch all records, fallback to "active" status if undefined in DB
+        const users = await usersCollection.find({}, options).toArray();
+
+        const cleanUsers = users.map((user) => ({
+          ...user,
+          status: user.status || "active",
+        }));
+
+        res.status(200).send({ success: true, data: cleanUsers });
+      } catch (error) {
+        res
+          .status(500)
+          .send({ success: false, message: "Internal server error" });
+      }
+    });
+
+    // 2. PATCH USER STATUS (Block / Unblock / Make Admin)
+    app.patch(
+      "/api/users/manage",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { userId, action } = req.body;
+
+          if (!userId || !["block", "unblock", "make-admin"].includes(action)) {
+            return res
+              .status(400)
+              .send({ success: false, message: "Invalid payload parameters." });
+          }
+
+          const filter = { _id: new ObjectId(userId) };
+          let updateDoc = {};
+
+          if (action === "block") {
+            updateDoc = { $set: { status: "blocked" } };
+          } else if (action === "unblock") {
+            updateDoc = { $set: { status: "active" } };
+          } else if (action === "make-admin") {
+            updateDoc = { $set: { role: "admin" } };
+          }
+
+          const result = await usersCollection.updateOne(filter, updateDoc);
+
+          if (result.modifiedCount === 1) {
+            res.status(200).send({
+              success: true,
+              message: `User successfully updated via: ${action}`,
+            });
+          } else {
+            res.status(404).send({
+              success: false,
+              message: "User not found or no changes made.",
+            });
+          }
+        } catch (error) {
+          res.status(500).send({
+            success: false,
+            message: "Internal server error updating user configurations.",
+          });
+        }
+      },
+    );
 
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
