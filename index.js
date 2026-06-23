@@ -30,6 +30,7 @@ async function run() {
     const favoritesCollection = database.collection("favorites");
     const sessionCollection = database.collection("session");
     const forumPostsCollection = database.collection("forumPosts");
+    const commentsCollection = database.collection("comments");
 
     // --- Authentication & Authorization Middlewares ---
     const verifyToken = async (req, res, next) => {
@@ -571,6 +572,268 @@ async function run() {
         });
       }
     });
+
+    // Fetch Details and All Associated Comments for a Single Specific Post
+    app.get("/api/forum/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+
+        if (!ObjectId.isValid(id)) {
+          return res
+            .status(400)
+            .send({ success: false, message: "Invalid post ID format." });
+        }
+
+        const postQuery = { _id: new ObjectId(id) };
+        const commentsQuery = { postId: new ObjectId(id) };
+
+        const [post, comments] = await Promise.all([
+          forumPostsCollection.findOne(postQuery),
+          commentsCollection
+            .find(commentsQuery)
+            .sort({ createdAt: 1 })
+            .toArray(),
+        ]);
+
+        if (!post) {
+          return res
+            .status(404)
+            .send({ success: false, message: "Forum post not found." });
+        }
+
+        res.status(200).send({
+          success: true,
+          data: {
+            post,
+            comments,
+          },
+        });
+      } catch (error) {
+        console.error("Error retrieving forum post details:", error);
+        res.status(500).send({
+          success: false,
+          message:
+            "Internal server error while loading discussion thread details.",
+        });
+      }
+    });
+
+    // Create a New Comment Entry under a Targeted Post (Protected)
+    app.post("/api/forum/:id/comments", verifyToken, async (req, res) => {
+      try {
+        const id = req.params.id;
+        const user = req.user;
+        const { text } = req.body;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({
+            success: false,
+            message: "Invalid post target format reference.",
+          });
+        }
+        if (!text || text.trim() === "") {
+          return res.status(400).send({
+            success: false,
+            message: "Comment body text cannot be empty.",
+          });
+        }
+
+        const newCommentDoc = {
+          postId: new ObjectId(id),
+          userId: new ObjectId(user._id),
+          userName: user.name || "Anonymous Member",
+          userImage: user.image || "",
+          text: text.trim(),
+          createdAt: new Date(),
+        };
+
+        const result = await commentsCollection.insertOne(newCommentDoc);
+
+        if (result.insertedId) {
+          res.status(201).send({
+            success: true,
+            message: "Comment published successfully.",
+            data: { _id: result.insertedId, ...newCommentDoc },
+          });
+        } else {
+          res.status(500).send({
+            success: false,
+            message: "Failed to persist comment data record.",
+          });
+        }
+      } catch (error) {
+        console.error("Error committing comment entry submission:", error);
+        res.status(500).send({
+          success: false,
+          message: "Internal server error while finalizing comment submission.",
+        });
+      }
+    });
+
+    // Handle Like/Dislike Vote Toggles for a Post (Protected)
+    app.patch("/api/forum/:id/vote", verifyToken, async (req, res) => {
+      try {
+        const id = req.params.id;
+        const userId = req.user._id;
+        const { action } = req.body;
+
+        if (!ObjectId.isValid(id) || !["like", "dislike"].includes(action)) {
+          return res
+            .status(400)
+            .send({ success: false, message: "Invalid parameters specified." });
+        }
+
+        const userObjId = new ObjectId(userId);
+        const post = await forumPostsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (!post)
+          return res
+            .status(404)
+            .send({ success: false, message: "Post not found." });
+
+        const likes = post.likes || [];
+        const dislikes = post.dislikes || [];
+
+        const hasLiked = likes.some((id) => id.toString() === userId);
+        const hasDisliked = dislikes.some((id) => id.toString() === userId);
+
+        let updateOperator = {};
+
+        if (action === "like") {
+          if (hasLiked) {
+            updateOperator = { $pull: { likes: userObjId } };
+          } else {
+            updateOperator = {
+              $addToSet: { likes: userObjId },
+              $pull: { dislikes: userObjId },
+            };
+          }
+        } else if (action === "dislike") {
+          if (hasDisliked) {
+            updateOperator = { $pull: { dislikes: userObjId } };
+          } else {
+            updateOperator = {
+              $addToSet: { dislikes: userObjId },
+              $pull: { likes: userObjId },
+            };
+          }
+        }
+
+        await forumPostsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          updateOperator,
+        );
+
+        const updatedPost = await forumPostsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        res.status(200).send({
+          success: true,
+          likes: updatedPost.likes || [],
+          dislikes: updatedPost.dislikes || [],
+        });
+      } catch (error) {
+        res.status(500).send({
+          success: false,
+          message: "Internal server error updating vote metrics.",
+        });
+      }
+    });
+
+    // Update a Specific User Comment (Protected)
+    app.patch(
+      "/api/forum/comments/:commentId",
+      verifyToken,
+      async (req, res) => {
+        try {
+          const { commentId } = req.params;
+          const { text } = req.body;
+          const userId = req.user._id;
+
+          if (!text || text.trim() === "") {
+            return res
+              .status(400)
+              .send({
+                success: false,
+                message: "Text content cannot be left empty.",
+              });
+          }
+
+          const filter = {
+            _id: new ObjectId(commentId),
+            userId: new ObjectId(userId),
+          };
+          const result = await commentsCollection.updateOne(filter, {
+            $set: { text: text.trim() },
+          });
+
+          if (result.modifiedCount === 1) {
+            res
+              .status(200)
+              .send({
+                success: true,
+                message: "Comment updated successfully.",
+              });
+          } else {
+            res
+              .status(404)
+              .send({
+                success: false,
+                message: "Comment not found or unauthorized deletion target.",
+              });
+          }
+        } catch (error) {
+          res
+            .status(500)
+            .send({
+              success: false,
+              message: "Internal server error updating comment data.",
+            });
+        }
+      },
+    );
+
+    // Delete a Specific User Comment (Protected)
+    app.delete(
+      "/api/forum/comments/:commentId",
+      verifyToken,
+      async (req, res) => {
+        try {
+          const { commentId } = req.params;
+          const userId = req.user._id;
+
+          const filter = {
+            _id: new ObjectId(commentId),
+            userId: new ObjectId(userId),
+          };
+          const result = await commentsCollection.deleteOne(filter);
+
+          if (result.deletedCount === 1) {
+            res
+              .status(200)
+              .send({
+                success: true,
+                message: "Comment dropped successfully.",
+              });
+          } else {
+            res
+              .status(404)
+              .send({
+                success: false,
+                message: "Comment not found or unauthorized deletion target.",
+              });
+          }
+        } catch (error) {
+          res
+            .status(500)
+            .send({
+              success: false,
+              message: "Internal server error processing comment drop request.",
+            });
+        }
+      },
+    );
 
     // =========================================================================
     // 4. ADMINISTRATIVE MODERATION & USER MANAGEMENT ROUTES (ADMIN ONLY)
