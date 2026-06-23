@@ -89,23 +89,27 @@ async function run() {
       next();
     };
 
-    // ==========================================
-    // 1. PUBLIC API ROUTES
-    // ==========================================
+    // =========================================================================
+    // 1. PUBLIC BASE CATALOG & CATEGORIES ROUTES
+    // =========================================================================
+
+    // Server Health Check Ping
     app.get("/", (req, res) => {
-      res.send("Hello World!");
+      res.status(200).send("Hello World!");
     });
 
-    // Get Approved Classes Catalog Catalog (With Search, Filter, Pagination)
+    // Get Approved Classes Catalog (With Search, Filter, Pagination)
     app.get("/api/classes", async (req, res) => {
       try {
         const { search, category, page = 1, limit = 15 } = req.query;
         const query = { status: "Approved" };
 
+        // Apply fallback search string text pattern matching validation
         if (search && search.trim() !== "") {
           query.className = { $regex: search.trim(), $options: "i" };
         }
 
+        // Apply multi-category filtering intersection selection matrix
         if (category && category.trim() !== "") {
           const categoryArray = category.split(",").map((cat) => cat.trim());
           query.category = { $in: categoryArray };
@@ -115,6 +119,7 @@ async function run() {
         const limitNumber = parseInt(limit, 10);
         const skipOffset = (pageNumber - 1) * limitNumber;
 
+        // Run cursor database aggregation lookups in parallel
         const [classes, totalCount] = await Promise.all([
           classesCollection
             .find(query)
@@ -126,7 +131,7 @@ async function run() {
 
         const totalPages = Math.ceil(totalCount / limitNumber);
 
-        res.send({
+        res.status(200).send({
           success: true,
           data: classes,
           meta: {
@@ -147,7 +152,7 @@ async function run() {
       }
     });
 
-    // Get Unique List of Available Categories
+    // Get Unique List of Available Categories Across Approved Curriculums
     app.get("/api/categories", async (req, res) => {
       try {
         const categoriesPipeline = await classesCollection
@@ -160,7 +165,7 @@ async function run() {
 
         const cleanCategories = categoriesPipeline.map((item) => item._id);
 
-        res.send({
+        res.status(200).send({
           success: true,
           data: cleanCategories,
         });
@@ -173,33 +178,18 @@ async function run() {
       }
     });
 
-    // ==========================================
-    // 2. TRAINER & PROTECTED MANIPULATION ROUTES
-    // ==========================================
+    // =========================================================================
+    // 2. TRAINER CURRICULUM MANAGEMENT ROUTES (PROTECTED)
+    // =========================================================================
 
-    // Create New Class Entry
-    app.post("/api/classes", verifyToken, verifyTrainer, async (req, res) => {
-      const newClass = req.body;
-      const result = await classesCollection.insertOne(newClass);
-      if (result.insertedId) {
-        res.status(201).send({ message: "Class created successfully" });
-      } else {
-        res.status(500).send({ message: "Failed to create class" });
-      }
-    });
-
-    // Get Logged In Trainer's Specific Classes (CRITICAL: Static routes placed ABOVE dynamic dynamic paths)
+    // Get Logged In Trainer's Specific Classes
     app.get("/api/classes/my-classes", verifyToken, async (req, res) => {
       try {
         const user = req.user;
-
-        const query = {
-          trainerId: user._id.toString(),
-        };
-
+        const query = { trainerId: user._id.toString() };
         const result = await classesCollection.find(query).toArray();
 
-        res.send(result);
+        res.status(200).send(result);
       } catch (error) {
         console.error("Error retrieving trainer classes:", error);
         res
@@ -208,61 +198,200 @@ async function run() {
       }
     });
 
+    // Create New Class Entry
+    app.post("/api/classes", verifyToken, verifyTrainer, async (req, res) => {
+      try {
+        const newClass = req.body;
+        const result = await classesCollection.insertOne(newClass);
+
+        if (result.insertedId) {
+          res
+            .status(201)
+            .send({ success: true, message: "Class created successfully" });
+        } else {
+          res
+            .status(500)
+            .send({ success: false, message: "Failed to create class" });
+        }
+      } catch (error) {
+        res
+          .status(500)
+          .send({ success: false, message: "Internal Server Error" });
+      }
+    });
+
     // Delete Targeted Class Entry
     app.delete("/api/classes/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await classesCollection.deleteOne(query);
-      if (result.deletedCount === 1) {
-        res.send({ message: "Class deleted successfully" });
-      } else {
-        res.status(404).send({ message: "Class not found" });
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await classesCollection.deleteOne(query);
+
+        if (result.deletedCount === 1) {
+          res
+            .status(200)
+            .send({ success: true, message: "Class deleted successfully" });
+        } else {
+          res.status(404).send({ success: false, message: "Class not found" });
+        }
+      } catch (error) {
+        res
+          .status(500)
+          .send({ success: false, message: "Internal Server Error" });
       }
     });
 
     // Partial Edit Update Class Meta Property Attributes
     app.patch("/api/classes/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
-      const updatedClass = req.body;
-      const filter = { _id: new ObjectId(id) };
-      const updateDoc = {
-        $set: updatedClass,
-      };
-      const result = await classesCollection.updateOne(filter, updateDoc);
-      if (result.modifiedCount === 1) {
-        res.send({ success: true, message: "Class updated successfully" });
-      } else {
-        res.status(404).send({ success: false, message: "Class not found" });
+      try {
+        const id = req.params.id;
+        const updatedClass = req.body;
+        const filter = { _id: new ObjectId(id) };
+        const updateDoc = { $set: updatedClass };
+
+        const result = await classesCollection.updateOne(filter, updateDoc);
+
+        if (result.modifiedCount === 1) {
+          res
+            .status(200)
+            .send({ success: true, message: "Class updated successfully" });
+        } else {
+          res.status(404).send({ success: false, message: "Class not found" });
+        }
+      } catch (error) {
+        res
+          .status(500)
+          .send({ success: false, message: "Internal Server Error" });
       }
     });
 
     // Fetch Details for a Single Specific Class
     app.get("/api/classes/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await classesCollection.findOne(query);
-      if (result) {
-        res.status(200).send({ success: true, data: result });
-      } else {
-        res.status(404).send({ message: "Class not found" });
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await classesCollection.findOne(query);
+
+        if (result) {
+          res.status(200).send({ success: true, data: result });
+        } else {
+          res.status(404).send({ success: false, message: "Class not found" });
+        }
+      } catch (error) {
+        res
+          .status(500)
+          .send({ success: false, message: "Internal Server Error" });
       }
     });
 
-    // ==========================================
-    // 3. SECURED USER REACTION/FAVORITES ROUTES
-    // ==========================================
+    // =========================================================================
+    // 3. USER PROFILE, VERIFICATION, & REACTION ROUTES
+    // =========================================================================
 
-    // Toggle Favorite Action (Add or Remove)
+    // Fetch Details for Currently Authenticated Profile Session
+    app.get("/api/users/me", verifyToken, async (req, res) => {
+      try {
+        const tokenUser = req.user;
+        const user = await usersCollection.findOne({
+          _id: new ObjectId(tokenUser._id),
+        });
+
+        if (!user) {
+          return res
+            .status(404)
+            .send({
+              success: false,
+              message: "User profile record not found.",
+            });
+        }
+
+        res.status(200).send({ success: true, data: user });
+      } catch (error) {
+        console.error("Error retrieving user profile information:", error);
+        res
+          .status(500)
+          .send({
+            success: false,
+            message: "Internal server error while fetching user profile data.",
+          });
+      }
+    });
+
+    // Submit New Verification Professional Application Form to Become a Trainer
+    app.post("/api/users/apply-trainer", verifyToken, async (req, res) => {
+      try {
+        const user = req.user;
+        const { experience, specialties } = req.body;
+
+        if (
+          !experience ||
+          !specialties ||
+          !Array.isArray(specialties) ||
+          specialties.length === 0
+        ) {
+          return res.status(400).send({
+            success: false,
+            message:
+              "Missing required profile details: experience or specialties.",
+          });
+        }
+
+        const filter = { _id: new ObjectId(user._id) };
+        const updateDoc = {
+          $set: {
+            trainerApplication: "pending",
+            trainerApplicationDetails: {
+              experience: parseInt(experience, 10),
+              specialties: specialties,
+              appliedAt: new Date(),
+            },
+          },
+        };
+
+        const result = await usersCollection.updateOne(filter, updateDoc);
+
+        if (result.modifiedCount === 1) {
+          res.status(200).send({
+            success: true,
+            message:
+              "Application submitted successfully. Status updated to pending.",
+          });
+        } else {
+          res
+            .status(404)
+            .send({
+              success: false,
+              message: "User profile record not found or data unchanged.",
+            });
+        }
+      } catch (error) {
+        console.error(
+          "Error processing trainer application submission:",
+          error,
+        );
+        res
+          .status(500)
+          .send({
+            success: false,
+            message:
+              "Internal server error while compiling trainer verification records.",
+          });
+      }
+    });
+
+    // Toggle Favorite Action Matrix (Add or Remove)
     app.post("/api/favorites/toggle", verifyToken, async (req, res) => {
       try {
         const user = req.user;
         const { classId } = req.body;
 
         if (!classId) {
-          return res.status(400).send({
-            success: false,
-            message: "Missing required field: classId",
-          });
+          return res
+            .status(400)
+            .send({
+              success: false,
+              message: "Missing required field: classId",
+            });
         }
 
         const query = {
@@ -274,18 +403,14 @@ async function run() {
           await favoritesCollection.findOneAndDelete(query);
 
         if (existingFavorite) {
-          return res.send({
+          return res.status(200).send({
             success: true,
             isFavorited: false,
             message: "Removed from favorites successfully.",
           });
         }
 
-        const newFavoriteDoc = {
-          ...query,
-          createdAt: new Date(),
-        };
-
+        const newFavoriteDoc = { ...query, createdAt: new Date() };
         await favoritesCollection.insertOne(newFavoriteDoc);
 
         res.status(201).send({
@@ -295,24 +420,28 @@ async function run() {
         });
       } catch (error) {
         console.error("Error toggling favorite class state:", error);
-        res.status(500).send({
-          success: false,
-          message: "Internal server error while processing favorite updates.",
-        });
+        res
+          .status(500)
+          .send({
+            success: false,
+            message: "Internal server error while processing favorite updates.",
+          });
       }
     });
 
-    // Verify If Class Exists On Target User's List
+    // Verify If Target Class Entry Exists On Current Profile Favorite Registry
     app.get("/api/favorites/check", verifyToken, async (req, res) => {
       try {
         const user = req.user;
         const { classId } = req.query;
 
         if (!classId) {
-          return res.status(400).send({
-            success: false,
-            message: "Missing parameter: classId is required",
-          });
+          return res
+            .status(400)
+            .send({
+              success: false,
+              message: "Missing parameter: classId is required",
+            });
         }
 
         const query = {
@@ -321,31 +450,24 @@ async function run() {
         };
 
         const count = await favoritesCollection.countDocuments(query);
-        const isFavorited = count > 0;
-
-        res.send({
-          success: true,
-          isFavorited,
-        });
+        res.status(200).send({ success: true, isFavorited: count > 0 });
       } catch (error) {
         console.error("Error verifying class favorite criteria state:", error);
-        res.status(500).send({
-          success: false,
-          message: "Internal server error while checking favorite status.",
-        });
+        res
+          .status(500)
+          .send({
+            success: false,
+            message: "Internal server error while checking favorite status.",
+          });
       }
     });
 
+    // Fetch Complete Aggregated Pipeline Registry of User Favorites
     app.get("/api/favorites/my-favorites", verifyToken, async (req, res) => {
       try {
         const user = req.user;
-
         const pipeline = [
-          {
-            $match: {
-              userId: new ObjectId(user._id),
-            },
-          },
+          { $match: { userId: new ObjectId(user._id) } },
           {
             $lookup: {
               from: "classes",
@@ -354,9 +476,7 @@ async function run() {
               as: "classDetails",
             },
           },
-          {
-            $unwind: "$classDetails",
-          },
+          { $unwind: "$classDetails" },
           {
             $project: {
               _id: 1,
@@ -378,239 +498,24 @@ async function run() {
         ];
 
         const result = await favoritesCollection.aggregate(pipeline).toArray();
-        res.send(result);
+        res.status(200).send(result);
       } catch (error) {
         console.error("Error retrieving my favorites via aggregation:", error);
-        res.status(500).send({
-          success: false,
-          message:
-            "Internal server error while retrieving aggregated favorites.",
-        });
-      }
-    });
-
-    app.post("/api/users/apply-trainer", verifyToken, async (req, res) => {
-      try {
-        const user = req.user;
-        const { experience, specialties } = req.body;
-
-        if (
-          !experience ||
-          !specialties ||
-          !Array.isArray(specialties) ||
-          specialties.length === 0
-        ) {
-          return res.status(400).send({
+        res
+          .status(500)
+          .send({
             success: false,
             message:
-              "Missing required profile details: experience or specialties.",
+              "Internal server error while retrieving aggregated favorites.",
           });
-        }
-
-        const filter = { _id: new ObjectId(user._id) };
-
-        const updateDoc = {
-          $set: {
-            trainerApplication: "pending",
-            trainerApplicationDetails: {
-              experience: parseInt(experience, 10),
-              specialties: specialties,
-              appliedAt: new Date(),
-            },
-          },
-        };
-
-        const result = await usersCollection.updateOne(filter, updateDoc);
-
-        if (result.modifiedCount === 1) {
-          res.status(200).send({
-            success: true,
-            message:
-              "Application submitted successfully. Status updated to pending.",
-          });
-        } else {
-          res.status(404).send({
-            success: false,
-            message: "User profile record not found or data unchanged.",
-          });
-        }
-      } catch (error) {
-        console.error(
-          "Error processing trainer application submission:",
-          error,
-        );
-        res.status(500).send({
-          success: false,
-          message:
-            "Internal server error while compiling trainer verification records.",
-        });
       }
     });
 
-    app.get(
-      "/api/applied-trainers",
-      verifyToken,
-      verifyAdmin,
-      async (req, res) => {
-        try {
-          const query = {
-            trainerApplication: { $in: ["pending", "rejected"] },
-          };
+    // =========================================================================
+    // 4. ADMINISTRATIVE MODERATION & USER MANAGEMENT ROUTES (ADMIN ONLY)
+    // =========================================================================
 
-          const options = {
-            projection: {
-              _id: 1,
-              name: 1,
-              email: 1,
-              image: 1,
-              role: 1,
-              trainerApplication: 1,
-              trainerApplicationDetails: 1,
-            },
-          };
-
-          const applications = await usersCollection
-            .find(query, options)
-            .sort({ "trainerApplicationDetails.appliedAt": -1 })
-            .toArray();
-
-          res.status(200).send({
-            success: true,
-            count: applications.length,
-            data: applications,
-          });
-        } catch (error) {
-          res
-            .status(500)
-            .send({ success: false, message: "Internal server error" });
-        }
-      },
-    );
-
-    app.patch(
-      "/api/applied-trainers/review",
-      verifyToken,
-      verifyAdmin,
-      async (req, res) => {
-        try {
-          const { userId, action, feedback } = req.body;
-
-          if (!userId || !["approve", "reject"].includes(action)) {
-            return res.status(400).send({
-              success: false,
-              message:
-                "Invalid payload parameters. Required: userId and action ('approve' or 'reject').",
-            });
-          }
-
-          const filter = { _id: new ObjectId(userId) };
-          let updateDoc = {};
-
-          if (action === "approve") {
-            updateDoc = {
-              $set: {
-                role: "trainer",
-                trainerApplication: "approved",
-                "trainerApplicationDetails.reviewedAt": new Date(),
-              },
-            };
-          } else if (action === "reject") {
-            updateDoc = {
-              $set: {
-                role: "user",
-                trainerApplication: "rejected",
-                "trainerApplicationDetails.feedback":
-                  feedback || "No feedback provided.",
-                "trainerApplicationDetails.reviewedAt": new Date(),
-              },
-            };
-          }
-
-          const result = await usersCollection.updateOne(filter, updateDoc);
-
-          if (result.modifiedCount === 1) {
-            res.status(200).send({
-              success: true,
-              message: `Application successfully processed with status: ${action}.`,
-            });
-          } else {
-            res.status(404).send({
-              success: false,
-              message:
-                "Target user application not found or status already set.",
-            });
-          }
-        } catch (error) {
-          console.error("Error updating trainer application status:", error);
-          res.status(500).send({
-            success: false,
-            message:
-              "Internal server error while processing approval state changes.",
-          });
-        }
-      },
-    );
-
-    app.get("/api/users/me", verifyToken, async (req, res) => {
-      try {
-        const tokenUser = req.user;
-
-        const user = await usersCollection.findOne({
-          _id: new ObjectId(tokenUser._id),
-        });
-
-        if (!user) {
-          return res.status(404).send({
-            success: false,
-            message: "User profile record not found.",
-          });
-        }
-
-        res.status(200).send({
-          success: true,
-          data: user,
-        });
-      } catch (error) {
-        console.error("Error retrieving user profile information:", error);
-        res.status(500).send({
-          success: false,
-          message: "Internal server error while fetching user profile data.",
-        });
-      }
-    });
-
-    app.get("/api/trainers", verifyToken, verifyAdmin, async (req, res) => {
-      try {
-        const query = { role: "trainer" };
-
-        const options = {
-          projection: {
-            _id: 1,
-            name: 1,
-            email: 1,
-            image: 1,
-            role: 1,
-            trainerApplicationDetails: 1,
-          },
-        };
-
-        const trainers = await usersCollection.find(query, options).toArray();
-
-        res.status(200).send({
-          success: true,
-          count: trainers.length,
-          data: trainers,
-        });
-      } catch (error) {
-        console.error("Error retrieving trainers list:", error);
-        res.status(500).send({
-          success: false,
-          message: "Internal server error while fetching trainers directory.",
-        });
-      }
-    });
-
-    // 1. GET ALL USERS (For rendering the data table)
+    // Get All User Registration Profiles For Management Table
     app.get("/api/users", verifyToken, verifyAdmin, async (req, res) => {
       try {
         const options = {
@@ -623,7 +528,6 @@ async function run() {
             status: 1,
           },
         };
-        // Fetch all records, fallback to "active" status if undefined in DB
         const users = await usersCollection.find({}, options).toArray();
 
         const cleanUsers = users.map((user) => ({
@@ -639,7 +543,7 @@ async function run() {
       }
     });
 
-    // 2. PATCH USER STATUS (Block / Unblock / Make Admin)
+    // Update User Operational Profile States (Block / Unblock / Promoted Admin)
     app.patch(
       "/api/users/manage",
       verifyToken,
@@ -668,24 +572,266 @@ async function run() {
           const result = await usersCollection.updateOne(filter, updateDoc);
 
           if (result.modifiedCount === 1) {
-            res.status(200).send({
-              success: true,
-              message: `User successfully updated via: ${action}`,
-            });
+            res
+              .status(200)
+              .send({
+                success: true,
+                message: `User successfully updated via: ${action}`,
+              });
           } else {
-            res.status(404).send({
-              success: false,
-              message: "User not found or no changes made.",
-            });
+            res
+              .status(404)
+              .send({
+                success: false,
+                message: "User not found or no changes made.",
+              });
           }
         } catch (error) {
-          res.status(500).send({
-            success: false,
-            message: "Internal server error updating user configurations.",
-          });
+          res
+            .status(500)
+            .send({
+              success: false,
+              message: "Internal server error updating user configurations.",
+            });
         }
       },
     );
+
+    // Get All Submitted Classes Across All Status States
+    app.get(
+      "/api/classes/manage",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const classes = await classesCollection
+            .find({})
+            .sort({ createdAt: -1 })
+            .toArray();
+          res
+            .status(200)
+            .send({ success: true, count: classes.length, data: classes });
+        } catch (error) {
+          console.error("Error fetching submitted classes directory:", error);
+          res
+            .status(500)
+            .send({
+              success: false,
+              message:
+                "Internal server error while retrieving administrative classes workspace.",
+            });
+        }
+      },
+    );
+
+    // Moderate Curriculum Proposals Lifecycle (Approve / Reject / Permanent Delete)
+    app.patch(
+      "/api/classes/manage/review",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { classId, action } = req.body;
+
+          if (!classId || !["approve", "reject", "delete"].includes(action)) {
+            return res
+              .status(400)
+              .send({
+                success: false,
+                message: "Invalid action payload context parameters.",
+              });
+          }
+
+          const filter = { _id: new ObjectId(classId) };
+
+          if (action === "delete") {
+            const deleteResult = await classesCollection.deleteOne(filter);
+            if (deleteResult.deletedCount === 1) {
+              return res
+                .status(200)
+                .send({
+                  success: true,
+                  message: "Class entry permanently removed.",
+                });
+            }
+          } else {
+            const targetStatus = action === "approve" ? "Approved" : "Pending";
+            const updateResult = await classesCollection.updateOne(filter, {
+              $set: { status: targetStatus },
+            });
+
+            if (updateResult.modifiedCount === 1) {
+              return res
+                .status(200)
+                .send({
+                  success: true,
+                  message: `Class state successfully adjusted to ${targetStatus}`,
+                });
+            }
+          }
+
+          res
+            .status(404)
+            .send({
+              success: false,
+              message: "Class record not found or no alterations made.",
+            });
+        } catch (error) {
+          console.error("Error managing class action execution:", error);
+          res
+            .status(500)
+            .send({
+              success: false,
+              message: "Internal server error reviewing classes.",
+            });
+        }
+      },
+    );
+
+    // Get Pending and Rejected Trainer Validation Applications
+    app.get(
+      "/api/applied-trainers",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const query = {
+            trainerApplication: { $in: ["pending", "rejected"] },
+          };
+          const options = {
+            projection: {
+              _id: 1,
+              name: 1,
+              email: 1,
+              image: 1,
+              role: 1,
+              trainerApplication: 1,
+              trainerApplicationDetails: 1,
+            },
+          };
+
+          const applications = await usersCollection
+            .find(query, options)
+            .sort({ "trainerApplicationDetails.appliedAt": -1 })
+            .toArray();
+
+          res
+            .status(200)
+            .send({
+              success: true,
+              count: applications.length,
+              data: applications,
+            });
+        } catch (error) {
+          res
+            .status(500)
+            .send({ success: false, message: "Internal server error" });
+        }
+      },
+    );
+
+    // Process Trainer Verification Applications (Approve / Reject & Demote)
+    app.patch(
+      "/api/applied-trainers/review",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { userId, action, feedback } = req.body;
+
+          if (!userId || !["approve", "reject"].includes(action)) {
+            return res
+              .status(400)
+              .send({
+                success: false,
+                message:
+                  "Invalid payload parameters. Required: userId and action ('approve' or 'reject').",
+              });
+          }
+
+          const filter = { _id: new ObjectId(userId) };
+          let updateDoc = {};
+
+          if (action === "approve") {
+            updateDoc = {
+              $set: {
+                role: "trainer",
+                trainerApplication: "approved",
+                "trainerApplicationDetails.reviewedAt": new Date(),
+              },
+            };
+          } else if (action === "reject") {
+            updateDoc = {
+              $set: {
+                role: "user",
+                trainerApplication: "rejected",
+                "trainerApplicationDetails.feedback":
+                  feedback || "No feedback provided.",
+                "trainerApplicationDetails.reviewedAt": new Date(),
+              },
+            };
+          }
+
+          const result = await usersCollection.updateOne(filter, updateDoc);
+
+          if (result.modifiedCount === 1) {
+            res
+              .status(200)
+              .send({
+                success: true,
+                message: `Application successfully processed with status: ${action}.`,
+              });
+          } else {
+            res
+              .status(404)
+              .send({
+                success: false,
+                message:
+                  "Target user application not found or status already set.",
+              });
+          }
+        } catch (error) {
+          console.error("Error updating trainer application status:", error);
+          res
+            .status(500)
+            .send({
+              success: false,
+              message:
+                "Internal server error while processing approval state changes.",
+            });
+        }
+      },
+    );
+
+    // Get Active Verified Instructors Directory List
+    app.get("/api/trainers", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const query = { role: "trainer" };
+        const options = {
+          projection: {
+            _id: 1,
+            name: 1,
+            email: 1,
+            image: 1,
+            role: 1,
+            trainerApplicationDetails: 1,
+          },
+        };
+        const trainers = await usersCollection.find(query, options).toArray();
+
+        res
+          .status(200)
+          .send({ success: true, count: trainers.length, data: trainers });
+      } catch (error) {
+        console.error("Error retrieving trainers list:", error);
+        res
+          .status(500)
+          .send({
+            success: false,
+            message: "Internal server error while fetching trainers directory.",
+          });
+      }
+    });
 
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
