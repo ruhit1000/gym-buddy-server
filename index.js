@@ -227,6 +227,73 @@ async function run() {
       }
     });
 
+    // Create New Community Forum Post (Trainers & Admins Only)
+    app.post("/api/forum", verifyToken, async (req, res) => {
+      try {
+        const user = req.user;
+        const { title, description, image } = req.body;
+
+        if (user.role !== "trainer" && user.role !== "admin") {
+          return res.status(403).send({
+            success: false,
+            message:
+              "Access denied. Only trainers and administrators can publish forum topics.",
+          });
+        }
+
+        if (!title || title.trim() === "") {
+          return res
+            .status(400)
+            .send({ success: false, message: "A post title is required." });
+        }
+        if (!description || description.trim() === "") {
+          return res
+            .status(400)
+            .send({
+              success: false,
+              message: "A post description body is required.",
+            });
+        }
+
+        const newPostDoc = {
+          title: title.trim(),
+          description: description.trim(),
+          image: image || "",
+          authorId: new ObjectId(user._id),
+          authorName: user.name || "Anonymous Staff",
+          authorRole: user.role, // Saves either 'trainer' or 'admin'
+          likes: [],
+          dislikes: [],
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+
+        const result = await forumPostsCollection.insertOne(newPostDoc);
+
+        if (result.insertedId) {
+          res.status(201).send({
+            success: true,
+            message: "Forum post published successfully.",
+            postId: result.insertedId,
+          });
+        } else {
+          res
+            .status(500)
+            .send({
+              success: false,
+              message: "Failed to persist forum post in database.",
+            });
+        }
+      } catch (error) {
+        console.error("Error creating new forum post:", error);
+        res.status(500).send({
+          success: false,
+          message:
+            "Internal server error while compiling forum post submission.",
+        });
+      }
+    });
+
     // Get Unique List of Available Categories Across Approved Curriculums
     app.get("/api/categories", async (req, res) => {
       try {
@@ -752,12 +819,10 @@ async function run() {
           const userId = req.user._id;
 
           if (!text || text.trim() === "") {
-            return res
-              .status(400)
-              .send({
-                success: false,
-                message: "Text content cannot be left empty.",
-              });
+            return res.status(400).send({
+              success: false,
+              message: "Text content cannot be left empty.",
+            });
           }
 
           const filter = {
@@ -769,27 +834,21 @@ async function run() {
           });
 
           if (result.modifiedCount === 1) {
-            res
-              .status(200)
-              .send({
-                success: true,
-                message: "Comment updated successfully.",
-              });
+            res.status(200).send({
+              success: true,
+              message: "Comment updated successfully.",
+            });
           } else {
-            res
-              .status(404)
-              .send({
-                success: false,
-                message: "Comment not found or unauthorized deletion target.",
-              });
+            res.status(404).send({
+              success: false,
+              message: "Comment not found or unauthorized deletion target.",
+            });
           }
         } catch (error) {
-          res
-            .status(500)
-            .send({
-              success: false,
-              message: "Internal server error updating comment data.",
-            });
+          res.status(500).send({
+            success: false,
+            message: "Internal server error updating comment data.",
+          });
         }
       },
     );
@@ -810,27 +869,21 @@ async function run() {
           const result = await commentsCollection.deleteOne(filter);
 
           if (result.deletedCount === 1) {
-            res
-              .status(200)
-              .send({
-                success: true,
-                message: "Comment dropped successfully.",
-              });
+            res.status(200).send({
+              success: true,
+              message: "Comment dropped successfully.",
+            });
           } else {
-            res
-              .status(404)
-              .send({
-                success: false,
-                message: "Comment not found or unauthorized deletion target.",
-              });
+            res.status(404).send({
+              success: false,
+              message: "Comment not found or unauthorized deletion target.",
+            });
           }
         } catch (error) {
-          res
-            .status(500)
-            .send({
-              success: false,
-              message: "Internal server error processing comment drop request.",
-            });
+          res.status(500).send({
+            success: false,
+            message: "Internal server error processing comment drop request.",
+          });
         }
       },
     );
