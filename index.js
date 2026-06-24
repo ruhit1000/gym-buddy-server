@@ -995,6 +995,54 @@ async function run() {
       }
     });
 
+    // Admin Force Delete Any Forum Post (Admin Only)
+    app.delete(
+      "/api/admin/forum/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+
+          if (!ObjectId.isValid(id)) {
+            return res
+              .status(400)
+              .send({ success: false, message: "Invalid post ID format." });
+          }
+
+          const targetPost = await forumPostsCollection.findOne({
+            _id: new ObjectId(id),
+          });
+          if (!targetPost) {
+            return res
+              .status(404)
+              .send({
+                success: false,
+                message: "Forum post not found on the platform.",
+              });
+          }
+
+          await Promise.all([
+            forumPostsCollection.deleteOne({ _id: new ObjectId(id) }),
+            commentsCollection.deleteMany({ postId: new ObjectId(id) }),
+          ]);
+
+          res.status(200).send({
+            success: true,
+            message:
+              "Inappropriate forum thread successfully moderated and removed by Admin.",
+          });
+        } catch (error) {
+          console.error("Admin error deleting forum post:", error);
+          res.status(500).send({
+            success: false,
+            message:
+              "Internal server error during administrative post deletion.",
+          });
+        }
+      },
+    );
+
     // Update User Operational Profile States (Block / Unblock / Promoted Admin)
     app.patch(
       "/api/users/manage",
