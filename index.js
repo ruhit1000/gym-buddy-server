@@ -1296,12 +1296,10 @@ async function run() {
         } = req.body;
 
         if (!sessionId || !amount || !classId || !userId) {
-          return res
-            .status(400)
-            .send({
-              success: false,
-              message: "Missing critical booking metrics.",
-            });
+          return res.status(400).send({
+            success: false,
+            message: "Missing critical booking metrics.",
+          });
         }
 
         // Prevent duplicate logging instances if page is reloaded
@@ -1338,21 +1336,17 @@ async function run() {
             bookingId: result.insertedId,
           });
         } else {
-          res
-            .status(500)
-            .send({
-              success: false,
-              message: "Failed to persist booking log.",
-            });
+          res.status(500).send({
+            success: false,
+            message: "Failed to persist booking log.",
+          });
         }
       } catch (error) {
         console.error("Error creating booking record:", error);
-        res
-          .status(500)
-          .send({
-            success: false,
-            message: "Internal server error logging booking.",
-          });
+        res.status(500).send({
+          success: false,
+          message: "Internal server error logging booking.",
+        });
       }
     });
 
@@ -1377,6 +1371,166 @@ async function run() {
           success: false,
           message: "Internal server error fetching historical records.",
         });
+      }
+    });
+
+    // ==========================================
+    // USER DASHBOARD MATRIX AGGREGATION
+    // ==========================================
+
+    // Get Unified User Dashboard Metrics & Aggregations (Protected)
+    app.get("/api/user/dashboard-stats", verifyToken, async (req, res) => {
+      try {
+        const userId = new ObjectId(req.user._id);
+
+        const statsPipeline = await usersCollection
+          .aggregate([
+            { $match: { _id: userId } },
+            {
+              $facet: {
+                // 1. Fetch Summary Metric Counts
+                counters: [
+                  {
+                    $lookup: {
+                      from: "bookings",
+                      localField: "_id",
+                      foreignField: "userId",
+                      as: "bookedData",
+                    },
+                  },
+                  {
+                    $lookup: {
+                      from: "favorites",
+                      localField: "_id",
+                      foreignField: "userId",
+                      as: "favData",
+                    },
+                  },
+                  {
+                    $project: {
+                      totalBooked: { $size: "$bookedData" },
+                      totalFavorites: { $size: "$favData" },
+                    },
+                  },
+                ],
+
+                // 2. Fetch Trainer Application Status Trackers
+                trainerApplication: [
+                  {
+                    $lookup: {
+                      from: "trainer_applications", // Replace with your exact applications collection name
+                      localField: "_id",
+                      foreignField: "userId",
+                      as: "appInfo",
+                    },
+                  },
+                  {
+                    $unwind: {
+                      path: "$appInfo",
+                      preserveNullAndEmptyArrays: true,
+                    },
+                  },
+                  {
+                    $project: {
+                      status: { $ifNull: ["$appInfo.status", null] },
+                      feedback: { $ifNull: ["$appInfo.feedback", ""] },
+                    },
+                  },
+                ],
+
+                // 3. Fetch Upcoming Class Sessions (Sorted by nearest execution dates)
+                upcomingSessions: [
+                  {
+                    $lookup: {
+                      from: "bookings",
+                      localField: "_id",
+                      foreignField: "userId",
+                      as: "userBookings",
+                    },
+                  },
+                  { $unwind: "$userBookings" },
+                  {
+                    $lookup: {
+                      from: "classes",
+                      localField: "userBookings.classId",
+                      foreignField: "_id",
+                      as: "classDetails",
+                    },
+                  },
+                  { $unwind: "$classDetails" },
+                  // Filter to only display upcoming classes
+                  { $match: { "classDetails.date": { $gte: new Date() } } },
+                  { $sort: { "classDetails.date": 1 } },
+                  { $limit: 3 },
+                  {
+                    $project: {
+                      _id: "$classDetails._id",
+                      className: "$classDetails.className",
+                      trainerName: "$classDetails.trainerName",
+                      duration: "$classDetails.duration",
+                      image: "$classDetails.image",
+                      date: "$classDetails.date",
+                    },
+                  },
+                ],
+
+                // 4. Fetch User's Favorited Classes
+                favoriteClasses: [
+                  {
+                    $lookup: {
+                      from: "favorites",
+                      localField: "_id",
+                      foreignField: "userId",
+                      as: "userFavs",
+                    },
+                  },
+                  { $unwind: "$userFavs" },
+                  {
+                    $lookup: {
+                      from: "classes",
+                      localField: "userFavs.classId",
+                      foreignField: "_id",
+                      as: "favClassDetails",
+                    },
+                  },
+                  { $unwind: "$favClassDetails" },
+                  { $limit: 4 },
+                  {
+                    $project: {
+                      _id: "$favClassDetails._id",
+                      className: "$favClassDetails.className",
+                      duration: "$favClassDetails.duration",
+                      intensity: "$favClassDetails.intensity",
+                      image: "$favClassDetails.image",
+                    },
+                  },
+                ],
+              },
+            },
+          ])
+          .toArray();
+
+        const result = statsPipeline[0];
+        const dashboardData = {
+          totalBooked: result.counters[0]?.totalBooked || 0,
+          totalFavorites: result.counters[0]?.totalFavorites || 0,
+          application: result.trainerApplication[0] || {
+            status: null,
+            feedback: "",
+          },
+          upcomingSessions: result.upcomingSessions || [],
+          favoriteClasses: result.favoriteClasses || [],
+        };
+
+        res.status(200).send({ success: true, data: dashboardData });
+      } catch (error) {
+        console.error("Dashboard aggregation pipeline failed:", error);
+        res
+          .status(500)
+          .send({
+            success: false,
+            message: "Internal server error compilation matrix.",
+          });
       }
     });
 
