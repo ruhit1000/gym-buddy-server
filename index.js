@@ -1375,7 +1375,7 @@ async function run() {
     });
 
     // ==========================================
-    // USER DASHBOARD MATRIX AGGREGATION
+    // DASHBOARD MATRIX AGGREGATION
     // ==========================================
 
     // Get Unified User Dashboard Metrics & Aggregations (Protected)
@@ -1531,6 +1531,81 @@ async function run() {
             success: false,
             message: "Internal server error compilation matrix.",
           });
+      }
+    });
+
+    // Get Trainer Dashboard Metrics & Aggregations (Protected)
+    app.get("/api/trainer/dashboard-stats", verifyToken, async (req, res) => {
+      try {
+        const user = req.user;
+
+        // Ensure authorization guard matches trainer role context
+        if (user.role !== "trainer" && user.role !== "admin") {
+          return res.status(403).send({ success: false, message: "Access denied." });
+        }
+
+        const trainerName = user.name;
+
+        const trainerStats = await classesCollection.aggregate([
+          { $match: { trainerName: trainerName } },
+          {
+            $facet: {
+              // 1. Core Analytics Counters
+              metrics: [
+                {
+                  $group: {
+                    _id: null,
+                    totalClasses: { $sum: 1 },
+                    totalStudents: { $sum: { $ifNull: ["$bookingCount", 0] } }
+                  }
+                }
+              ],
+
+              // 2. Active Classes Feed with capacity calculations
+              activeClasses: [
+                { $sort: { createdAt: -1 } },
+                { $limit: 3 },
+                {
+                  $project: {
+                    _id: 1,
+                    className: 1,
+                    duration: 1,
+                    totalSlots: { $ifNull: ["$totalSlots", 0] },
+                    bookingCount: { $ifNull: ["$bookingCount", 0] },
+                    capacityPercentage: {
+                      $cond: {
+                        if: { $gt: ["$totalSlots", 0] },
+                        then: { $round: [{ $multiply: [{ $divide: ["$bookingCount", "$totalSlots"] }, 100] }, 0] },
+                        else: 0
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]).toArray();
+
+        // 3. Fetch latest forum activity for the "Forum Buzz" sidebar component
+        const latestForumBuzz = await forumPostsCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .limit(3)
+          .project({ title: 1, description: 1, commentCount: 1 })
+          .toArray();
+
+        const facetResult = trainerStats[0];
+        const dashboardData = {
+          totalClassesCreated: facetResult.metrics[0]?.totalClasses || 0,
+          totalStudentsEnrolled: facetResult.metrics[0]?.totalStudents || 0,
+          activeClasses: facetResult.activeClasses || [],
+          forumBuzz: latestForumBuzz || []
+        };
+
+        res.status(200).send({ success: true, data: dashboardData });
+      } catch (error) {
+        console.error("Trainer analytics pipeline exception error:", error);
+        res.status(500).send({ success: false, message: "Internal server error gathering stats." });
       }
     });
 
