@@ -247,12 +247,10 @@ async function run() {
             .send({ success: false, message: "A post title is required." });
         }
         if (!description || description.trim() === "") {
-          return res
-            .status(400)
-            .send({
-              success: false,
-              message: "A post description body is required.",
-            });
+          return res.status(400).send({
+            success: false,
+            message: "A post description body is required.",
+          });
         }
 
         const newPostDoc = {
@@ -277,12 +275,10 @@ async function run() {
             postId: result.insertedId,
           });
         } else {
-          res
-            .status(500)
-            .send({
-              success: false,
-              message: "Failed to persist forum post in database.",
-            });
+          res.status(500).send({
+            success: false,
+            message: "Failed to persist forum post in database.",
+          });
         }
       } catch (error) {
         console.error("Error creating new forum post:", error);
@@ -423,6 +419,79 @@ async function run() {
         res
           .status(500)
           .send({ success: false, message: "Internal Server Error" });
+      }
+    });
+
+    // Get Logged In User's Specific Forum Posts (Protected)
+    app.get("/api/forum/my-posts", verifyToken, async (req, res) => {
+      try {
+        const user = req.user;
+        const query = { authorId: new ObjectId(user._id) };
+
+        const posts = await forumPostsCollection
+          .find(query)
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.status(200).send({
+          success: true,
+          data: posts,
+        });
+      } catch (error) {
+        console.error("Error retrieving personal forum posts:", error);
+        res.status(500).send({
+          success: false,
+          message: "Internal server error while fetching your posts.",
+        });
+      }
+    });
+
+    // Delete a Specific Forum Post (Author Only)
+    app.delete("/api/forum/:id", verifyToken, async (req, res) => {
+      try {
+        const { id } = req.params;
+        const user = req.user;
+
+        if (!ObjectId.isValid(id)) {
+          return res
+            .status(400)
+            .send({ success: false, message: "Invalid post ID format." });
+        }
+
+        const targetPost = await forumPostsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (!targetPost) {
+          return res
+            .status(404)
+            .send({ success: false, message: "Forum post not found." });
+        }
+
+        const isAuthor = targetPost.authorId.toString() === user._id.toString();
+
+        if (!isAuthor) {
+          return res.status(403).send({
+            success: false,
+            message:
+              "Unauthorized action. You can only delete your own forum posts.",
+          });
+        }
+
+        await Promise.all([
+          forumPostsCollection.deleteOne({ _id: new ObjectId(id) }),
+          commentsCollection.deleteMany({ postId: new ObjectId(id) }),
+        ]);
+
+        res.status(200).send({
+          success: true,
+          message: "Forum thread permanently removed.",
+        });
+      } catch (error) {
+        console.error("Error deleting forum post:", error);
+        res.status(500).send({
+          success: false,
+          message: "Internal server error deleting post.",
+        });
       }
     });
 
@@ -686,56 +755,62 @@ async function run() {
     });
 
     // Create a New Comment Entry under a Targeted Post (Protected)
-    app.post("/api/forum/:id/comments", verifyToken, async (req, res) => {
-      try {
-        const id = req.params.id;
-        const user = req.user;
-        const { text } = req.body;
+    app.post(
+      "/api/forum/:id/comments",
+      verifyToken,
+      checkBlock,
+      async (req, res) => {
+        try {
+          const id = req.params.id;
+          const user = req.user;
+          const { text } = req.body;
 
-        if (!ObjectId.isValid(id)) {
-          return res.status(400).send({
-            success: false,
-            message: "Invalid post target format reference.",
-          });
-        }
-        if (!text || text.trim() === "") {
-          return res.status(400).send({
-            success: false,
-            message: "Comment body text cannot be empty.",
-          });
-        }
+          if (!ObjectId.isValid(id)) {
+            return res.status(400).send({
+              success: false,
+              message: "Invalid post target format reference.",
+            });
+          }
+          if (!text || text.trim() === "") {
+            return res.status(400).send({
+              success: false,
+              message: "Comment body text cannot be empty.",
+            });
+          }
 
-        const newCommentDoc = {
-          postId: new ObjectId(id),
-          userId: new ObjectId(user._id),
-          userName: user.name || "Anonymous Member",
-          userImage: user.image || "",
-          text: text.trim(),
-          createdAt: new Date(),
-        };
+          const newCommentDoc = {
+            postId: new ObjectId(id),
+            userId: new ObjectId(user._id),
+            userName: user.name || "Anonymous Member",
+            userImage: user.image || "",
+            text: text.trim(),
+            createdAt: new Date(),
+          };
 
-        const result = await commentsCollection.insertOne(newCommentDoc);
+          const result = await commentsCollection.insertOne(newCommentDoc);
 
-        if (result.insertedId) {
-          res.status(201).send({
-            success: true,
-            message: "Comment published successfully.",
-            data: { _id: result.insertedId, ...newCommentDoc },
-          });
-        } else {
+          if (result.insertedId) {
+            res.status(201).send({
+              success: true,
+              message: "Comment published successfully.",
+              data: { _id: result.insertedId, ...newCommentDoc },
+            });
+          } else {
+            res.status(500).send({
+              success: false,
+              message: "Failed to persist comment data record.",
+            });
+          }
+        } catch (error) {
+          console.error("Error committing comment entry submission:", error);
           res.status(500).send({
             success: false,
-            message: "Failed to persist comment data record.",
+            message:
+              "Internal server error while finalizing comment submission.",
           });
         }
-      } catch (error) {
-        console.error("Error committing comment entry submission:", error);
-        res.status(500).send({
-          success: false,
-          message: "Internal server error while finalizing comment submission.",
-        });
-      }
-    });
+      },
+    );
 
     // Handle Like/Dislike Vote Toggles for a Post (Protected)
     app.patch("/api/forum/:id/vote", verifyToken, async (req, res) => {
