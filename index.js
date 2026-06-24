@@ -31,6 +31,7 @@ async function run() {
     const sessionCollection = database.collection("session");
     const forumPostsCollection = database.collection("forumPosts");
     const commentsCollection = database.collection("comments");
+    const bookingsCollection = database.collection("bookings");
 
     // --- Authentication & Authorization Middlewares ---
     const verifyToken = async (req, res, next) => {
@@ -1014,12 +1015,10 @@ async function run() {
             _id: new ObjectId(id),
           });
           if (!targetPost) {
-            return res
-              .status(404)
-              .send({
-                success: false,
-                message: "Forum post not found on the platform.",
-              });
+            return res.status(404).send({
+              success: false,
+              message: "Forum post not found on the platform.",
+            });
           }
 
           await Promise.all([
@@ -1274,6 +1273,109 @@ async function run() {
         res.status(500).send({
           success: false,
           message: "Internal server error while fetching trainers directory.",
+        });
+      }
+    });
+
+    // ==========================================
+    // 3. SECURED BOOKINGS / TRANSACTION ROUTES
+    // ==========================================
+
+    // Log a Successful Payment Booking Record (Protected)
+    app.post("/api/bookings", verifyToken, async (req, res) => {
+      try {
+        const {
+          sessionId,
+          customerEmail,
+          amount,
+          transactionId,
+          classId,
+          userId,
+          className,
+          trainerName,
+        } = req.body;
+
+        if (!sessionId || !amount || !classId || !userId) {
+          return res
+            .status(400)
+            .send({
+              success: false,
+              message: "Missing critical booking metrics.",
+            });
+        }
+
+        // Prevent duplicate logging instances if page is reloaded
+        const existingBooking = await bookingsCollection.findOne({
+          stripeSessionId: sessionId,
+        });
+        if (existingBooking) {
+          return res.status(200).send({
+            success: true,
+            message: "Booking already tracked.",
+            bookingId: existingBooking._id,
+          });
+        }
+
+        const newBookingDoc = {
+          userId: new ObjectId(userId),
+          classId: new ObjectId(classId),
+          className,
+          trainerName,
+          customerEmail,
+          amount: Number(amount),
+          transactionId: transactionId || "",
+          stripeSessionId: sessionId,
+          status: "completed",
+          createdAt: new Date(),
+        };
+
+        const result = await bookingsCollection.insertOne(newBookingDoc);
+
+        if (result.insertedId) {
+          res.status(201).send({
+            success: true,
+            message: "Booking registered successfully.",
+            bookingId: result.insertedId,
+          });
+        } else {
+          res
+            .status(500)
+            .send({
+              success: false,
+              message: "Failed to persist booking log.",
+            });
+        }
+      } catch (error) {
+        console.error("Error creating booking record:", error);
+        res
+          .status(500)
+          .send({
+            success: false,
+            message: "Internal server error logging booking.",
+          });
+      }
+    });
+
+    // Get Logged In User's Order History (Protected)
+    app.get("/api/bookings/my-bookings", verifyToken, async (req, res) => {
+      try {
+        const user = req.user;
+        const query = { userId: new ObjectId(user._id) };
+
+        const history = await bookingsCollection
+          .find(query)
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.status(200).send({
+          success: true,
+          data: history,
+        });
+      } catch (error) {
+        console.error("Error retrieving user bookings:", error);
+        res.status(500).send({
+          success: false,
+          message: "Internal server error fetching historical records.",
         });
       }
     });
