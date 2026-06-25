@@ -92,6 +92,80 @@ async function run() {
       next();
     };
 
+    // ==========================================
+    // PUBLIC LANDING PAGE LANDMARKS
+    // ==========================================
+
+    // Get Top 3 Featured Classes Sorted by Booking Count (Public)
+    app.get("/api/classes/featured", async (req, res) => {
+      try {
+        const query = { status: "Approved" };
+
+        const featuredClasses = await classesCollection
+          .find(query)
+          .sort({ bookingCount: -1 })
+          .limit(3)
+          .project({
+            _id: 1,
+            className: 1,
+            trainerName: 1,
+            category: 1,
+            price: 1,
+            duration: 1,
+            bookingCount: 1,
+            image: 1,
+          })
+          .toArray();
+
+        res.status(200).send({
+          success: true,
+          message: "Top featured classes successfully retrieved.",
+          data: featuredClasses,
+        });
+      } catch (error) {
+        console.error("Error retrieving featured class matrices:", error);
+        res.status(500).send({
+          success: false,
+          message:
+            "Internal server error compilation while parsing top class aggregates.",
+        });
+      }
+    });
+
+    // Get 3-4 Most Recent Forum Posts (Public)
+    app.get("/api/forum/latest", async (req, res) => {
+      try {
+        const latestPosts = await forumPostsCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .limit(4)
+          .project({
+            _id: 1,
+            title: 1,
+            description: 1,
+            image: 1,
+            authorName: 1,
+            authorRole: 1,
+            commentCount: 1,
+            likes: 1,
+            createdAt: 1,
+          })
+          .toArray();
+
+        res.status(200).send({
+          success: true,
+          message: "Latest community forum posts successfully retrieved.",
+          data: latestPosts,
+        });
+      } catch (error) {
+        console.error("Error retrieving latest forum trends:", error);
+        res.status(500).send({
+          success: false,
+          message: "Internal server error while parsing recent forum logs.",
+        });
+      }
+    });
+
     // =========================================================================
     // 1. PUBLIC BASE CATALOG & CATEGORIES ROUTES
     // =========================================================================
@@ -1525,12 +1599,10 @@ async function run() {
         res.status(200).send({ success: true, data: dashboardData });
       } catch (error) {
         console.error("Dashboard aggregation pipeline failed:", error);
-        res
-          .status(500)
-          .send({
-            success: false,
-            message: "Internal server error compilation matrix.",
-          });
+        res.status(500).send({
+          success: false,
+          message: "Internal server error compilation matrix.",
+        });
       }
     });
 
@@ -1541,50 +1613,66 @@ async function run() {
 
         // Ensure authorization guard matches trainer role context
         if (user.role !== "trainer" && user.role !== "admin") {
-          return res.status(403).send({ success: false, message: "Access denied." });
+          return res
+            .status(403)
+            .send({ success: false, message: "Access denied." });
         }
 
         const trainerName = user.name;
 
-        const trainerStats = await classesCollection.aggregate([
-          { $match: { trainerName: trainerName } },
-          {
-            $facet: {
-              // 1. Core Analytics Counters
-              metrics: [
-                {
-                  $group: {
-                    _id: null,
-                    totalClasses: { $sum: 1 },
-                    totalStudents: { $sum: { $ifNull: ["$bookingCount", 0] } }
-                  }
-                }
-              ],
+        const trainerStats = await classesCollection
+          .aggregate([
+            { $match: { trainerName: trainerName } },
+            {
+              $facet: {
+                // 1. Core Analytics Counters
+                metrics: [
+                  {
+                    $group: {
+                      _id: null,
+                      totalClasses: { $sum: 1 },
+                      totalStudents: {
+                        $sum: { $ifNull: ["$bookingCount", 0] },
+                      },
+                    },
+                  },
+                ],
 
-              // 2. Active Classes Feed with capacity calculations
-              activeClasses: [
-                { $sort: { createdAt: -1 } },
-                { $limit: 3 },
-                {
-                  $project: {
-                    _id: 1,
-                    className: 1,
-                    duration: 1,
-                    totalSlots: { $ifNull: ["$totalSlots", 0] },
-                    bookingCount: { $ifNull: ["$bookingCount", 0] },
-                    capacityPercentage: {
-                      $cond: {
-                        if: { $gt: ["$totalSlots", 0] },
-                        then: { $round: [{ $multiply: [{ $divide: ["$bookingCount", "$totalSlots"] }, 100] }, 0] },
-                        else: 0
-                      }
-                    }
-                  }
-                }
-              ]
-            }
-          }
-        ]).toArray();
+                // 2. Active Classes Feed with capacity calculations
+                activeClasses: [
+                  { $sort: { createdAt: -1 } },
+                  { $limit: 3 },
+                  {
+                    $project: {
+                      _id: 1,
+                      className: 1,
+                      duration: 1,
+                      totalSlots: { $ifNull: ["$totalSlots", 0] },
+                      bookingCount: { $ifNull: ["$bookingCount", 0] },
+                      capacityPercentage: {
+                        $cond: {
+                          if: { $gt: ["$totalSlots", 0] },
+                          then: {
+                            $round: [
+                              {
+                                $multiply: [
+                                  { $divide: ["$bookingCount", "$totalSlots"] },
+                                  100,
+                                ],
+                              },
+                              0,
+                            ],
+                          },
+                          else: 0,
+                        },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          ])
+          .toArray();
 
         // 3. Fetch latest forum activity for the "Forum Buzz" sidebar component
         const latestForumBuzz = await forumPostsCollection
@@ -1599,15 +1687,206 @@ async function run() {
           totalClassesCreated: facetResult.metrics[0]?.totalClasses || 0,
           totalStudentsEnrolled: facetResult.metrics[0]?.totalStudents || 0,
           activeClasses: facetResult.activeClasses || [],
-          forumBuzz: latestForumBuzz || []
+          forumBuzz: latestForumBuzz || [],
         };
 
         res.status(200).send({ success: true, data: dashboardData });
       } catch (error) {
         console.error("Trainer analytics pipeline exception error:", error);
-        res.status(500).send({ success: false, message: "Internal server error gathering stats." });
+        res.status(500).send({
+          success: false,
+          message: "Internal server error gathering stats.",
+        });
       }
     });
+
+    // Get Admin Dashboard Metrics & Aggregations (Protected)
+    app.get(
+      "/api/admin/dashboard-stats",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const thirtyDaysAgo = new Date();
+          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+          const adminStats = await usersCollection
+            .aggregate([
+              {
+                $facet: {
+                  // 1. Core Platform Summary Analytics
+                  counters: [
+                    {
+                      $group: {
+                        _id: null,
+                        totalUsers: { $sum: 1 },
+                      },
+                    },
+                  ],
+                  classCounters: [
+                    {
+                      $lookup: {
+                        from: "classes",
+                        pipeline: [
+                          {
+                            $group: {
+                              _id: null,
+                              totalClasses: { $sum: 1 },
+                              totalBookings: { $sum: "$bookingCount" },
+                            },
+                          },
+                        ],
+                        as: "classMetrics",
+                      },
+                    },
+                    { $unwind: "$classMetrics" },
+                    {
+                      $project: {
+                        totalClasses: "$classMetrics.totalClasses",
+                        totalBooked: "$classMetrics.totalBookings",
+                      },
+                    },
+                    { $limit: 1 },
+                  ],
+
+                  // 2. Trainer Approvals Applications Queue
+                  trainerApprovals: [
+                    {
+                      $lookup: {
+                        from: "trainer_applications",
+                        pipeline: [
+                          { $match: { status: "PENDING" } },
+                          { $sort: { createdAt: 1 } },
+                          { $limit: 3 },
+                          {
+                            $project: {
+                              _id: 1,
+                              name: 1,
+                              experience: 1,
+                              status: 1,
+                            },
+                          },
+                        ],
+                        as: "pendingApps",
+                      },
+                    },
+                    { $project: { pendingApps: 1 } },
+                    { $limit: 1 },
+                  ],
+
+                  // 3. Popular Classes with high capacities
+                  popularClasses: [
+                    {
+                      $lookup: {
+                        from: "classes",
+                        pipeline: [
+                          { $sort: { bookingCount: -1 } },
+                          { $limit: 2 },
+                          {
+                            $project: {
+                              _id: 1,
+                              className: 1,
+                              schedule: 1,
+                              bookingCount: 1,
+                              totalSlots: 1,
+                              capacityPercentage: {
+                                $cond: {
+                                  if: { $gt: ["$totalSlots", 0] },
+                                  then: {
+                                    $round: [
+                                      {
+                                        $multiply: [
+                                          {
+                                            $divide: [
+                                              "$bookingCount",
+                                              "$totalSlots",
+                                            ],
+                                          },
+                                          100,
+                                        ],
+                                      },
+                                      0,
+                                    ],
+                                  },
+                                  else: 0,
+                                },
+                              },
+                            },
+                          },
+                        ],
+                        as: "topClasses",
+                      },
+                    },
+                    { $project: { topClasses: 1 } },
+                    { $limit: 1 },
+                  ],
+
+                  // 4. Dynamic Time-Series Historical Chart Data (Last 30 Days)
+                  membershipVelocity: [
+                    {
+                      $match: {
+                        createdAt: { $gte: thirtyDaysAgo },
+                      },
+                    },
+                    {
+                      $group: {
+                        _id: { $week: "$createdAt" },
+                        acquisitions: { $sum: 1 },
+                        // Tracks user profile churn if a status property is updated/tracked
+                        churn: {
+                          $sum: {
+                            $cond: [{ $eq: ["$status", "cancelled"] }, 1, 0],
+                          },
+                        },
+                      },
+                    },
+                    { $sort: { _id: 1 } },
+                    {
+                      $project: {
+                        _id: 0,
+                        name: { $concat: ["Wk ", { $toString: "$_id" }] },
+                        acquisitions: 1,
+                        churn: 1,
+                      },
+                    },
+                  ],
+                },
+              },
+            ])
+            .toArray();
+
+          const result = adminStats[0];
+
+          const dynamicChartData =
+            result.membershipVelocity?.length > 0
+              ? result.membershipVelocity
+              : [
+                  { name: "Wk 1", acquisitions: 0, churn: 0 },
+                  { name: "Wk 2", acquisitions: 0, churn: 0 },
+                  { name: "Wk 3", acquisitions: 0, churn: 0 },
+                  { name: "Wk 4", acquisitions: 0, churn: 0 },
+                ];
+
+          res.status(200).send({
+            success: true,
+            data: {
+              totalUsers: result.counters[0]?.totalUsers || 0,
+              totalClasses: result.classCounters[0]?.totalClasses || 0,
+              totalBooked: result.classCounters[0]?.totalBooked || 0,
+              approvals: result.trainerApprovals[0]?.pendingApps || [],
+              popularClasses: result.popularClasses[0]?.topClasses || [],
+              chartData: dynamicChartData,
+            },
+          });
+        } catch (error) {
+          console.error("Admin dashboard computation tracking failure:", error);
+          res.status(500).send({
+            success: false,
+            message: "Internal server error gathering stats.",
+          });
+        }
+      },
+    );
 
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
