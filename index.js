@@ -1424,6 +1424,38 @@ async function run() {
       }
     });
 
+    // Check if the current authenticated user has booked this session (Protected)
+    app.get("/api/bookings/check-booking", verifyToken, async (req, res) => {
+      try {
+        const { classId } = req.query;
+        const userId = req.user._id; 
+
+        if (!classId) {
+          return res.status(400).send({ 
+            success: false, 
+            message: "Missing classId parameter mapping query." 
+          });
+        }
+
+        const existingBooking = await bookingsCollection.findOne({
+          userId: new ObjectId(userId),
+          classId: new ObjectId(classId),
+          status: "completed"
+        });
+
+        res.status(200).send({
+          success: true,
+          hasBooked: !!existingBooking
+        });
+      } catch (error) {
+        console.error("Error verifying registration status:", error);
+        res.status(500).send({ 
+          success: false, 
+          message: "Internal server error verifying slot allocation mappings." 
+        });
+      }
+    });
+
     // Get Logged In User's Order History (Protected)
     app.get("/api/bookings/my-bookings", verifyToken, async (req, res) => {
       try {
